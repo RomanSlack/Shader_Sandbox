@@ -1,5 +1,7 @@
 # Shader Sandbox
 
+![Shader Preview](Screenshot from 2026-01-29 20-58-00.png)
+
 ![Shader Preview](Screenshot%20from%202026-01-29%2019-41-12.png)
 
 ## Tech Stack

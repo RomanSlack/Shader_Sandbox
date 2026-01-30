@@ -271,12 +271,12 @@ vec3 tanh3(vec3 x) {
 }
 
 // State-based color phase offsets
-vec3 getColorPhase(float state) {
-  // Idle: purple/blue/pink (0, 2, 4)
-  vec3 idle = vec3(0.0, 2.0, 4.0);
-  // User: cyan/teal/green
+vec3 getColorPhase(float state, float audio) {
+  // Idle: muted grey-blue (desaturated, calm)
+  vec3 idle = vec3(3.5, 3.8, 4.2); // Bluish-grey tones
+  // User: cyan/teal/green (cool, listening)
   vec3 user = vec3(2.5, 3.5, 5.0);
-  // AI: magenta/orange/coral
+  // AI: magenta/orange/coral (warm, speaking)
   vec3 ai = vec3(5.5, 1.0, 3.0);
 
   if (state < 1.0) {
@@ -286,15 +286,33 @@ vec3 getColorPhase(float state) {
   }
 }
 
+// Saturation control based on state
+float getSaturation(float state, float audio) {
+  // Idle with no audio = very desaturated
+  // Active states = more saturated
+  float baseSat = state < 0.5 ? 0.3 : 0.8;
+  // Audio adds saturation
+  return baseSat + audio * 0.5;
+}
+
 void main() {
   vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution) / min(u_resolution.x, u_resolution.y);
   uv /= u_zoom;
 
   float audio = u_audioLevel;
-  float t = u_time * (0.8 + audio * 0.5);
+
+  // === AUDIO-REACTIVE SPEED ===
+  // Base speed is very slow, audio makes it faster
+  float baseSpeed = 0.1; // Slow idle
+  float audioSpeed = audio * 1.5; // Audio boost
+  float speed = baseSpeed + audioSpeed;
+
+  // Time with speed applied
+  float t = u_time * speed;
 
   vec4 col = vec4(0.0);
-  vec3 colorPhase = getColorPhase(u_state);
+  vec3 colorPhase = getColorPhase(u_state, audio);
+  float saturation = getSaturation(u_state, audio);
 
   // Raymarching loop - Siri ribbon style
   float z = 0.0;
@@ -305,7 +323,7 @@ void main() {
     vec3 p = z * normalize(vec3(uv, -1.0));
     p.z += 9.0;
 
-    // Swirling axis that changes over time
+    // Swirling axis - speed affected by audio
     float s = 0.0;
     vec3 a = normalize(cos(vec3(0.0, 2.0, 4.0) - t * 0.5 + s * 0.3));
 
@@ -332,27 +350,32 @@ void main() {
     float d3 = abs(d2 - 1.0) + 0.2;
     float d = min(d1 + d2, d3) * 0.2;
 
-    // Accumulate color
+    // Accumulate color - speed also affects color cycling
     float colorWave = p.x * 0.4 + t * 0.3;
 
     // Audio-reactive brightness
-    float brightness = (1.0 + audio * 2.0);
+    float brightness = 0.6 + audio * 1.5;
 
     // Color based on state
-    vec4 sampleCol = vec4(
+    vec3 rawCol = vec3(
       cos(colorWave + colorPhase.x) + 1.0,
       cos(colorWave + colorPhase.y) + 1.0,
-      cos(colorWave + colorPhase.z) + 1.0,
-      1.0
-    ) * brightness;
+      cos(colorWave + colorPhase.z) + 1.0
+    );
 
-    // Also add the 5/s/s term for inner glow
+    // Apply saturation (desaturate for idle)
+    vec3 grey = vec3(dot(rawCol, vec3(0.299, 0.587, 0.114)));
+    rawCol = mix(grey, rawCol, saturation);
+
+    vec4 sampleCol = vec4(rawCol * brightness, 1.0);
+
+    // Inner glow
     float innerGlow = 5.0 / (s * s + 0.1);
-    sampleCol += vec4(innerGlow) * 0.3;
+    sampleCol.rgb += vec3(innerGlow) * 0.2;
 
     // Accumulate with distance falloff
     float contribution = 1.0 / (d * d + 0.001);
-    col += max(sampleCol, vec4(innerGlow * 0.5)) * contribution * 0.00003;
+    col += max(sampleCol, vec4(innerGlow * 0.3)) * contribution * 0.00003;
 
     z += d;
   }
@@ -362,17 +385,25 @@ void main() {
   float sphereMask = smoothstep(1.2, 0.3, dist);
   col.rgb *= sphereMask;
 
-  // Add glow
-  float glow = exp(-dist * 2.0) * (0.2 + audio * 0.3);
+  // Glow color - also desaturated for idle
   vec3 glowCol = vec3(
     cos(colorPhase.x) * 0.5 + 0.5,
     cos(colorPhase.y) * 0.5 + 0.5,
     cos(colorPhase.z) * 0.5 + 0.5
   );
+  vec3 greyGlow = vec3(dot(glowCol, vec3(0.299, 0.587, 0.114)));
+  glowCol = mix(greyGlow, glowCol, saturation);
+
+  // Add glow - subtle for idle, stronger with audio
+  float glow = exp(-dist * 2.0) * (0.15 + audio * 0.4);
   col.rgb += glowCol * glow * 0.3;
 
   // Tone mapping
   col.rgb = tanh3(col.rgb * 0.8);
+
+  // Darken slightly when idle with no audio
+  float idleDarken = 1.0 - (1.0 - u_state) * (1.0 - audio) * 0.2;
+  col.rgb *= idleDarken;
 
   gl_FragColor = vec4(col.rgb, 1.0);
 }
