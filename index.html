@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shader Sandbox</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      font-family: 'Monaco', 'Menlo', monospace;
+      display: flex;
+      height: 100vh;
+    }
+    #canvas {
+      flex: 1;
+    }
+    #editor-panel {
+      width: 400px;
+      background: #16213e;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    h1 { color: #e94560; font-size: 18px; }
+    #shader-code {
+      flex: 1;
+      background: #0f0f23;
+      color: #0f0;
+      border: 1px solid #e94560;
+      padding: 12px;
+      font-family: inherit;
+      font-size: 13px;
+      resize: none;
+      border-radius: 4px;
+    }
+    #shader-code:focus { outline: none; border-color: #00fff5; }
+    button {
+      background: #e94560;
+      color: white;
+      border: none;
+      padding: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: bold;
+      border-radius: 4px;
+    }
+    button:hover { background: #ff6b6b; }
+    #error { color: #ff6b6b; font-size: 11px; min-height: 60px; overflow: auto; }
+    .info { color: #888; font-size: 11px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="editor-panel">
+    <h1>Shader Sandbox</h1>
+    <p class="info">Twigl "geekest" mode.<br>o=output, FC=fragCoord, r=resolution, t=time</p>
+    <textarea id="shader-code">// Heavenly 2 by XorDev
+for(float i,z,d;i++<1e2;o+=(cos(z+t+vec4(0,1,2,3))+1.1)/d){vec3 p=z*normalize(FC.rgb*2.-r.xyy);p.z-=t;for(d=1.;d<9.;d/=.7)p+=cos(p.yzx*d+z*.2-t*.1)/d;z+=d=.02+.1*abs(p.y+1.);}o=tanh(o/2e3);</textarea>
+    <button onclick="compile()">Compile (Ctrl+Enter)</button>
+    <div id="error"></div>
+  </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2');
+const errorDiv = document.getElementById('error');
+const codeArea = document.getElementById('shader-code');
+
+let program = null;
+let startTime = performance.now();
+
+const vertSrc = `#version 300 es
+in vec2 a_pos;
+void main() {
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+function wrapShader(code) {
+  return `#version 300 es
+precision highp float;
+uniform vec2 resolution;
+uniform float time;
+out vec4 fragColor;
+
+// Simplex noise functions (twigl built-ins)
+vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
+vec2 mod289(vec2 x){return x-floor(x*(1./289.))*289.;}
+vec3 permute(vec3 x){return mod289(((x*34.)+1.)*x);}
+float snoise2D(vec2 v){
+  const vec4 C=vec4(.211324865405187,.366025403784439,-.577350269189626,.024390243902439);
+  vec2 i=floor(v+dot(v,C.yy));
+  vec2 x0=v-i+dot(i,C.xx);
+  vec2 i1;i1=(x0.x>x0.y)?vec2(1.,0.):vec2(0.,1.);
+  vec4 x12=x0.xyxy+C.xxzz;x12.xy-=i1;
+  i=mod289(i);
+  vec3 p=permute(permute(i.y+vec3(0.,i1.y,1.))+i.x+vec3(0.,i1.x,1.));
+  vec3 m=max(.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.);
+  m=m*m;m=m*m;
+  vec3 x=2.*fract(p*C.www)-1.;
+  vec3 h=abs(x)-.5;
+  vec3 ox=floor(x+.5);
+  vec3 a0=x-ox;
+  m*=1.79284291400159-.85373472095314*(a0*a0+h*h);
+  vec3 g;
+  g.x=a0.x*x0.x+h.x*x0.y;
+  g.yz=a0.yz*x12.xz+h.yz*x12.yw;
+  return 130.*dot(m,g);
+}
+
+void main() {
+  vec4 o = vec4(0.0);
+  vec4 FC = gl_FragCoord;
+  vec2 r = resolution;
+  float t = time;
+
+  ${code}
+
+  fragColor = o;
+}`;
+}
+
+function createShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader));
+  }
+  return shader;
+}
+
+function compile() {
+  errorDiv.textContent = '';
+  try {
+    const fragSrc = wrapShader(codeArea.value);
+    const vert = createShader(gl.VERTEX_SHADER, vertSrc);
+    const frag = createShader(gl.FRAGMENT_SHADER, fragSrc);
+
+    const newProgram = gl.createProgram();
+    gl.attachShader(newProgram, vert);
+    gl.attachShader(newProgram, frag);
+    gl.linkProgram(newProgram);
+
+    if (!gl.getProgramParameter(newProgram, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(newProgram));
+    }
+
+    if (program) gl.deleteProgram(program);
+    program = newProgram;
+
+    // Setup attribute
+    const posLoc = gl.getAttribLocation(program, 'a_pos');
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    errorDiv.style.color = '#0f0';
+    errorDiv.textContent = '✓ Compiled';
+  } catch (e) {
+    errorDiv.style.color = '#ff6b6b';
+    errorDiv.textContent = e.message;
+  }
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+function render() {
+  if (program) {
+    gl.useProgram(program);
+    gl.uniform2f(gl.getUniformLocation(program, 'resolution'), canvas.width, canvas.height);
+    gl.uniform1f(gl.getUniformLocation(program, 'time'), (performance.now() - startTime) / 1000);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+  requestAnimationFrame(render);
+}
+
+// Full screen quad
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+window.addEventListener('resize', resize);
+codeArea.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') compile();
+});
+
+resize();
+compile();
+render();
+</script>
+</body>
+</html>
