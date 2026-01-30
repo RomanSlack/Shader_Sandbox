@@ -131,19 +131,19 @@ export function useAudioLevel(): UseAudioLevelResult {
         const noiseFloor = noiseFloorRef.current;
         const gated = Math.max(0, rawNormalized - noiseFloor) / (1 - noiseFloor);
 
-        // Apply curve for more natural response
-        const curved = Math.pow(gated, 0.7) * 2.0;
+        // Apply curve - gentler response, less gain
+        const curved = Math.pow(gated, 0.5) * 1.0;
         const clampedLevel = Math.min(1, curved);
 
-        // Smoothing: interpolate towards target
-        // Fast attack (0.3), slower release (0.08)
+        // Heavy smoothing: slow attack, very slow release
+        // This creates a gentle, flowing response
         const currentSmoothed = smoothedLevelRef.current;
-        const smoothingFactor = clampedLevel > currentSmoothed ? 0.3 : 0.08;
+        const smoothingFactor = clampedLevel > currentSmoothed ? 0.08 : 0.03;
         const smoothed = currentSmoothed + (clampedLevel - currentSmoothed) * smoothingFactor;
         smoothedLevelRef.current = smoothed;
 
-        // If very low, snap to zero to avoid jitter
-        const finalLevel = smoothed < 0.02 ? 0 : smoothed;
+        // If very low, fade to zero smoothly
+        const finalLevel = smoothed < 0.01 ? 0 : smoothed;
 
         setAudioLevel(finalLevel);
         setDebugInfo(`lvl:${(finalLevel * 100).toFixed(0)}% nf:${(noiseFloor * 100).toFixed(0)}%`);
@@ -210,16 +210,16 @@ export function useAudioLevel(): UseAudioLevelResult {
           const gatedDb = db > noiseGateDb ? db : -60;
 
           const normalized = Math.max(0, Math.min(1, (gatedDb + 50) / 40));
-          const curved = Math.pow(normalized, 0.6);
+          const curved = Math.pow(normalized, 0.5) * 1.0;
 
-          // Smoothing: fast attack, slow release
+          // Heavy smoothing: slow attack, very slow release
           const currentSmoothed = smoothedLevelRef.current;
-          const smoothingFactor = curved > currentSmoothed ? 0.3 : 0.08;
+          const smoothingFactor = curved > currentSmoothed ? 0.08 : 0.03;
           const smoothed = currentSmoothed + (curved - currentSmoothed) * smoothingFactor;
           smoothedLevelRef.current = smoothed;
 
-          // Snap to zero if very low
-          const finalLevel = smoothed < 0.02 ? 0 : smoothed;
+          // Fade to zero smoothly
+          const finalLevel = smoothed < 0.01 ? 0 : smoothed;
 
           setAudioLevel(finalLevel);
           setDebugInfo(`dB:${db.toFixed(0)} lvl:${(finalLevel * 100).toFixed(0)}%`);
